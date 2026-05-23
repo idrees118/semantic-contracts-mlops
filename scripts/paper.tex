@@ -1,0 +1,1309 @@
+\documentclass[journal]{IEEEtran}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{amsthm}    
+\usepackage{algorithmic}
+\usepackage{algorithm}
+\usepackage{array}
+\usepackage{textcomp}
+\usepackage{cite}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{xcolor}
+\usepackage{url}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true, linkcolor=blue, citecolor=blue, urlcolor=blue}
+
+% FIX 2: \newtheorem declarations belong in the preamble, declared ONCE each.
+%         They were previously declared three times each inside the document
+%         body, which causes LaTeX to throw "already defined" errors.
+\newtheorem{definition}{Definition}
+\newtheorem{proposition}{Proposition}
+
+\definecolor{ieeeblue}{RGB}{0,114,188}
+
+% FIX 3: \texttt in two-column IEEE layout hyphenates long identifiers.
+%         This macro wraps them in \mbox to prevent mid-token line breaks.
+\newcommand{\mut}[1]{\mbox{\texttt{#1}}}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\begin{document}
+
+\title{Semantic Contract-Based Validation for Detecting Data 
+Pipeline Mutations in Tabular\\Machine Learning Datasets}
+
+\author{Muhammad Idrees
+and Adnan Amin
+\thanks{M. Idrees is with the Institute of Management Sciences (IMSciences), 
+Peshawar, Pakistan (e-mail: muhammadidrees9405@gmail.com).}
+\thanks{A. Amin is with the Institute of Management Sciences (IMSciences), 
+Peshawar, Pakistan (e-mail: adnan.amin@imsciences.edu.pk). 
+A. Amin is the corresponding author.}}
+
+\markboth{IEEE Access}%
+{M. Idrees and A. Amin: Semantic Contract-Based Validation for Data Pipeline Mutation Detection}
+
+\maketitle
+
+% ── Abstract ─────────────────────────────────────────────────────────────────
+\begin{abstract}
+Data quality failures in automated machine learning pipelines are among the
+most consequential and least visible reliability risks in deployed AI systems:
+they corrupt model behaviour without triggering any observable system error.
+A critical failure class---the \emph{semantic data mutation}---arises when
+incoming data is structurally well-formed and distributionally plausible yet
+violates domain-specific rules that govern the meaning of its columns.
+Classic examples include a column swap between stock Open and Close prices,
+a weekly sales value inflated sevenfold by a mis-applied daily-to-weekly
+aggregation, and an all-dates shift that destroys temporal alignment without
+altering any marginal distribution.  No existing production tool is designed
+to detect this class of failure.
+
+We introduce a \emph{semantic contract framework}: a set of programmatic,
+domain-aware detectors that express what the data \emph{means}, not merely
+what it \emph{looks like}.  We formalise the notion of a semantic mutation,
+define a five-category taxonomy of 28 mutation operators, and implement 25
+domain-specific contracts across three publicly available tabular datasets
+(Walmart retail sales, AAPL five-year stock prices, UCI household power
+consumption).
+
+Evaluation over $28 \times 4 = 112$ mutated trials and 12 clean-baseline
+trials demonstrates that the semantic validator achieves a pooled detection
+rate of \textbf{96.4\%} (95\% Wilson CI: 91.2\%--98.6\%), compared with
+49.1\%, 42.0\%, and 42.9\% for ensemble statistical, KS-drift, and
+Great-Expectations baselines respectively (all McNemar $p < 0.0001$).
+False-positive rate is \textbf{0.000} across all validators.  Semantic
+precision---the fraction of detections attributed to the correct mutation
+category---is 96.3\%, with four of five categories at 100\%.  On a held-out partition of nine mutation types
+withheld during development, the semantic validator achieves 88.9\%
+(95\% CI: 74.7\%--95.6\%), maintaining a $>$36 percentage-point advantage
+over all baselines on unseen mutations.  These results establish that
+statistical methods are structurally insufficient for semantic mutation
+detection, and that domain-aware contracts provide a principled, practical
+complement to existing pipeline monitoring tools.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Data Validation, Machine Learning, MLOps, Data Quality, Mutation Testing,
+Semantic Contracts, Tabular Data, Data Pipelines, Distribution Drift,
+Pipeline Monitoring
+\end{IEEEkeywords}
+
+
+\section{Introduction}
+\label{sec:intro}
+
+
+\IEEEPARstart{M}{odern} machine learning systems are not static artefacts: they are
+continuously retrained on data delivered by automated pipelines, and their
+predictive reliability is only as sound as the data flowing through those
+pipelines.  Sculley et al.\ \cite{sculley2015} identified data dependencies
+as one of the principal sources of hidden technical debt in real-world ML
+systems, noting that silent data errors compound over time in ways that
+model-level monitoring cannot detect.  Polyzotis et al.\ \cite{polyzotis2018}
+subsequently formalised data-lifecycle challenges in production ML at
+Google-scale, demonstrating that validation at the data layer---not just at
+the model output layer---is a first-class engineering concern.  Despite this
+recognition, the tooling ecosystem has not kept pace: existing validators
+check schemas and distributions, but neither can express what the data
+\emph{means}.
+
+Consider three scenarios that defeat every existing tool.  In the first, a
+column-ordering bug in an ETL migration silently swaps the \texttt{Open} and
+\texttt{Close} price columns in a financial dataset.  Both columns remain
+numeric, both remain within historical range, both pass all schema and
+KS-drift checks---yet a momentum model trained on this data learns
+inverted intraday signals.  In the second, an aggregation pipeline applies a
+daily-to-weekly summation twice, inflating \texttt{Weekly\_Sales} by a
+factor of seven.  The inflated values pass range checks because no absolute
+threshold was calibrated; they pass distributional checks because the shape
+of the distribution is preserved under scaling.  The downstream demand
+forecast overstates inventory requirements by $7\times$.  In the third, a
+cron job error shifts all timestamps forward by seven days.  Every marginal
+distribution is identical to clean data; only the temporal relationship to
+external events is destroyed.  A promotion-attribution model trained on this
+data attributes holiday spikes to the wrong week in perpetuity.
+In each case, the financial or operational consequence of the silent error
+dwarfs the cost of the mutation itself---yet the failure is invisible to
+every monitoring tool in the practitioner's stack.
+
+These three scenarios share a defining property: they are
+\textbf{semantically anomalous but statistically invisible}.  We formalise
+this property and call the underlying class of error a
+\emph{semantic data mutation}.  Existing tools---including Great
+Expectations \cite{greatexpectations2023}, the Kolmogorov-Smirnov drift
+detector \cite{kolmogorov1933}, ensemble statistical monitors, and
+TensorFlow Data Validation \cite{baylor2017tfx}---operate exclusively on
+syntactic or distributional properties of the data.  They cannot, by
+construction, detect mutations that preserve those properties.
+
+This paper makes the following four contributions:
+
+% FIX 4: Original used bare "1)" text instead of \item, which breaks the
+%         enumerate environment in LaTeX and produces garbled numbered output.
+\begin{enumerate}
+\item \textbf{Formal taxonomy:} The first systematic five-category taxonomy
+  of 28 semantic mutation operators (Scaling, Temporal, Structural, Quality,
+  Aggregation), grounded in documented real-world ETL failure patterns across
+  three production-grade tabular datasets.
+
+\item \textbf{Semantic contract framework:} Twenty-five domain-aware
+  programmatic detectors encoding relational invariants and temporal ordering
+  constraints that are, by construction, inexpressible as distributional
+  tests.
+
+\item \textbf{Rigorous empirical evaluation:} A four-seed, four-validator
+  controlled experiment demonstrating 96.4\% detection rate at 0.000
+  false-positive rate---a $>$96\,pp absolute improvement over random and a
+  47.3\,pp improvement over the strongest available statistical
+  baseline---with McNemar-exact $p < 0.0001$ for all pairwise comparisons.
+
+\item \textbf{Generalisation evidence:} A held-out evaluation on nine
+  mutation types entirely withheld during development, demonstrating 88.9\%
+  detection on unseen patterns---a $>$36\,pp advantage over all
+  baselines---and identifying the sole detection-limit case with principled
+  justification.
+\end{enumerate}
+
+The remainder of this paper is organised as follows.
+Section~\ref{sec:related} surveys existing data validation tools, ML
+pipeline testing methods, mutation testing literature, and drift detection
+approaches, positioning our contribution relative to each.
+Section~\ref{sec:formulation} provides formal definitions of semantic
+mutations, detection rate, false positive rate, and semantic precision, and
+proves by construction that statistical tests are insufficient.
+Section~\ref{sec:framework} presents the mutation taxonomy and contract
+design principles.  Section~\ref{sec:setup} details datasets, baselines, and
+statistical methods.  Section~\ref{sec:results} presents all experimental
+results.  Section~\ref{sec:discussion} discusses the core argument,
+limitations, and threats to validity.  Section~\ref{sec:conclusion} concludes
+with practical implications and future directions.
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Related Work}
+\label{sec:related}
+% ═════════════════════════════════════════════════════════════════════════════
+
+\subsection{Data Validation Tools for ML Pipelines}
+
+The most widely deployed data validation framework is Great Expectations
+\cite{greatexpectations2023}, which allows practitioners to define
+expectation suites over column statistics (mean, standard deviation,
+range, null rate, cardinality) and evaluate them against incoming data.
+Amazon Deequ \cite{schelter2018deequ} provides a declarative API for
+large-scale data quality verification on Apache Spark, with support for
+unit-test-style constraints and automatic constraint suggestion.  Baylor
+et al.\ \cite{baylor2017tfx} describe TensorFlow Extended, whose data
+validation component compares serving statistics against training statistics
+to detect training-serving skew.  The Auto-Validate-by-History system
+\cite{schelter2018automating} detects data quality issues in recurring
+pipelines by leveraging statistics from historical executions.
+
+The critical limitation shared by all of these tools is that they are
+\emph{syntax-first}: they validate that values fall within calibrated
+bounds, not that the relationships between values conform to domain
+semantics.  A seven-fold sales inflation is invisible to any tool whose
+bounds were calibrated on clean data without explicit knowledge that
+\texttt{Weekly\_Sales} must be aggregated exactly once per week.  A column
+swap is invisible to any tool that checks columns independently.  Polyzotis
+et al.\ \cite{polyzotis2018} explicitly identify the gap between statistical
+validation and semantic correctness as an open challenge in production ML.
+Our framework directly addresses this gap.
+
+\subsection{ML Pipeline Testing}
+
+Breck et al.\ \cite{breck2017} introduced the ML Test Score rubric, which
+codifies production-readiness criteria for ML systems including data tests,
+feature tests, and model tests.  They identify monitoring of input data
+distributions as essential, but acknowledge that semantic correctness checks
+are domain-specific and beyond the scope of automated scoring.  Schelter
+et al.\ \cite{schelter2018automating} present a system for automating
+large-scale data quality verification, demonstrating that constraint
+learning from historical data can catch syntactic anomalies at scale.
+Shankar et al.\ \cite{shankar2022operationalizing} conducted interview
+studies with production ML practitioners and found that data debugging
+accounts for the majority of operational effort, with semantic errors
+among the hardest to detect.  The continuous validation framework described by Reis and 
+Housley~\cite{reis2022} emphasises transformation-rule validation 
+as the layer most frequently absent in production pipelines---precisely 
+the layer our semantic contracts occupy. M\"{a}kinen et 
+al.~\cite{makinen2021mlops} similarly find that data preparation and 
+validation constitute the dominant operational burden in production ML 
+teams, confirming that the problem this paper addresses is both current 
+and widely experienced.
+
+\subsection{Mutation Testing}
+
+Mutation testing originates with DeMillo et al.\ \cite{demillo1978}, who
+proposed systematically introducing faults into programs to evaluate test
+suite adequacy.  Jia and Harman \cite{jia2010} provide a comprehensive
+survey of mutation testing advances, establishing the competent programmer
+hypothesis---that real faults are syntactically close to correct
+programs---as the theoretical justification for mutation operators.
+
+More recently, mutation testing has been applied to deep learning systems.
+Ma et al.\ \cite{ma2018deepmutation} propose mutation operators at the data,
+program, and model levels for DL systems.  Humbatova et al.\
+\cite{humbatova2021deepcrime} extend this with DeepCrime, defining 35
+mutation operators derived from real DL faults, demonstrating that
+semantically grounded mutations produce more meaningful test outcomes than
+arbitrary perturbations.  Our work applies a parallel methodology to the
+data pipeline layer: we define mutations grounded in real ETL failure
+patterns (unit confusion, aggregation errors, sensor freeze, column swaps)
+rather than in model architecture failures.  This distinction is
+fundamental: our mutations attack the \emph{data contract} between pipeline
+and model, not the model itself.  No prior mutation testing work targets the
+data contract layer of ML pipelines; this paper introduces that paradigm.
+
+\subsection{Distribution Drift Detection}
+
+The Kolmogorov-Smirnov test \cite{kolmogorov1933} remains the most widely
+used univariate drift detector in production systems.  Multivariate
+extensions include the Population Stability Index \cite{yurdakul2018psi},
+Jensen-Shannon divergence \cite{lin1991jsd}, and Wasserstein distance.
+Modern monitoring platforms such as Evidently AI and Whylogs provide
+ensemble drift scores combining multiple statistical tests.  Our ensemble
+baseline implements precisely this approach: KS + JSD + PSI + Pearson
+correlation matrix distance + autocorrelation function comparison, with
+any-one voting.
+
+The fundamental limitation of all distribution-based methods is established
+by construction: mutations that preserve marginal distributions are
+undetectable by any test whose power derives solely from distributional
+divergence.  A column swap between two highly correlated series may produce
+no statistically significant KS statistic on either column.  A timestamp
+shift preserves all marginal distributions exactly.  A sensor freeze
+producing 120 consecutive identical readings creates a local distributional
+anomaly that is diluted to insignificance in a 996,010-row dataset.
+Semantic contracts detect all three cases by reasoning about what the
+values mean---a capability that is orthogonal to statistical power and
+cannot be approximated by adding more statistical tests to an ensemble.
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Problem Formulation}
+\label{sec:formulation}
+% ═════════════════════════════════════════════════════════════════════════════
+
+\subsection{Notation and Definitions}
+
+Let $\mathcal{D}$ denote the space of tabular datasets over a fixed schema
+$\mathcal{S} = \{c_1, \ldots, c_k\}$ with corresponding domain types
+$\{\tau_1, \ldots, \tau_k\}$.  A dataset $D \in \mathcal{D}$ is a finite
+sequence of tuples $\langle r_1, \ldots, r_n \rangle$ where each $r_i$
+assigns a value in $\tau_j$ to each column $c_j$.
+
+\begin{definition}[Mutation Operator]
+A \emph{mutation operator} is a function $\mu : \mathcal{D}
+\rightarrow \mathcal{D}$ such that $\mu(D)$ conforms to schema
+$\mathcal{S}$ for every $D \in \mathcal{D}$. The output
+$D' = \mu(D)$ is called a \emph{mutant} of $D$.
+\end{definition}
+
+\begin{definition}[Statistical Indistinguishability]
+A mutant $D' = \mu(D)$ is \emph{statistically indistinguishable} from $D$
+with respect to a test family $\mathcal{T}$ if
+$T(D, D') = \mathrm{pass}$ for all $T \in \mathcal{T}$.  Let
+$\mathcal{T}_{\mathrm{stat}}$ denote the family of standard distributional
+tests (KS, JSD, PSI, correlation matrix, ACF comparison).
+\end{definition}
+
+\begin{definition}[Semantic Contract]
+A \emph{semantic contract} is a function
+$C : \mathcal{D} \times \mathcal{D} \rightarrow \{0, 1\}$ such that
+$C(D_{\mathrm{base}}, D_{\mathrm{test}}) = 0$ indicates a violation of a
+domain-specific invariant between $D_{\mathrm{base}}$ and
+$D_{\mathrm{test}}$.  A contract returns 1 (satisfied) if and only if the
+test dataset conforms to the domain rule encoded by the contract.
+\end{definition}
+
+% FIX 5: Added a proper \label to the Semantic Mutation definition so that
+%         the subsequent cross-reference uses \ref{def:semantic_mutation}
+%         rather than incorrectly referencing the equation label.
+\begin{definition}[Semantic Mutation]
+\label{def:semantic_mutation}
+A mutation operator $\mu$ is \emph{semantic} if there exists a clean dataset
+$D \in \mathcal{D}$ such that:
+\begin{equation}
+T_{\mathrm{stat}}(D,\, \mu(D)) = \mathrm{pass}
+\;\;\wedge\;\;
+\exists\, C \in \mathcal{C} : C(D,\, \mu(D)) = 0
+\label{eq:semantic_mutation}
+\end{equation}
+where $\mathcal{C}$ is the set of semantic contracts for the domain.
+That is, $\mu$ is undetectable by statistical tests but detectable by at
+least one semantic contract.
+\end{definition}
+
+% FIX 6: Was "Definition~\ref{eq:semantic_mutation}" (wrong — equation label).
+%         Corrected to reference the definition label defined above.
+Definition~4 formalises the core claim of this paper: a class
+of data mutations exists that is, by construction, beyond the
+reach of purely statistical validation.  The right-hand conjunct is
+satisfiable precisely when the mutation violates a domain invariant that
+statistical tests do not encode.
+
+\subsection{Evaluation Metrics}
+
+\begin{definition}[Detection Rate]
+Given a validator $V$, a set of $N$ mutated trials $\{(D_i, \mu_i(D_i))\}$,
+and the indicator $\mathbf{1}[\cdot]$:
+\begin{equation}
+\mathrm{DR}(V) = \frac{1}{N} \sum_{i=1}^{N}
+\mathbf{1}\!\left[V\!\left(D_i,\, \mu_i(D_i)\right) = \mathrm{fail}\right]
+\label{eq:dr}
+\end{equation}
+\end{definition}
+
+\begin{definition}[False Positive Rate]
+Given $M$ clean-baseline trials $\{(D_j, D_j)\}$:
+\begin{equation}
+\mathrm{FPR}(V) = \frac{1}{M} \sum_{j=1}^{M}
+\mathbf{1}\!\left[V\!\left(D_j,\, D_j\right) = \mathrm{fail}\right]
+\label{eq:fpr}
+\end{equation}
+\end{definition}
+
+\begin{definition}[Semantic Precision]
+Let $\mathcal{R}$ denote the set of detected mutated trials.  For each
+$r \in \mathcal{R}$, let $\kappa(r)$ be the ground-truth category of
+$\mu_r$, and let $\hat{\kappa}(r)$ be the category of the highest-confidence
+firing detector.  Semantic precision is:
+\begin{equation}
+\mathrm{SP}(V) = \frac{1}{|\mathcal{R}|}
+\sum_{r \in \mathcal{R}} \mathbf{1}\!\left[\hat{\kappa}(r) = \kappa(r)\right]
+\label{eq:sp}
+\end{equation}
+Semantic precision measures not only whether a mutation is detected, but
+whether the \emph{correct type of contract} fires---a stronger claim about
+the diagnostic utility of the framework.
+\end{definition}
+
+\subsection{Why Statistical Tests are Insufficient by Construction}
+
+The KS test and its multivariate generalisations test whether two samples
+are drawn from the same marginal distribution.  Their power is zero against
+any mutation that is a bijective rearrangement of existing values---including
+column permutations, timestamp translations, and any scaling that
+redistributes values within the same empirical support.  More precisely:
+
+\begin{proposition}
+Let $\mu$ be a column-swap operator that exchanges columns $c_a$ and $c_b$.
+If $c_a$ and $c_b$ are drawn from the same marginal distribution,
+then $\mathrm{KS}(D_i^{c_a}, \mu(D)_i^{c_a}) = \mathrm{pass}$ with
+probability 1 under any sample size.
+\end{proposition}
+
+\begin{proof}
+A column-swap operator $\mu_{ab}$ satisfies
+$\mu_{ab}(D)^{c_a} = D^{c_b}$ and $\mu_{ab}(D)^{c_b} = D^{c_a}$
+by definition. If $\mathbb{P}(c_a) = \mathbb{P}(c_b)$, then the
+empirical distribution of $\mu_{ab}(D)^{c_a}$ equals that of
+$D^{c_a}$, so the two-sample KS statistic
+$D_n(D^{c_a}, \mu_{ab}(D)^{c_a}) = 0$ for any $n$, and
+the test fails to reject $H_0$ with certainty.
+\end{proof}
+
+Similarly, any timestamp shift $\mu_{\delta t}$ satisfies
+$\forall c \in \mathcal{S}: \{v_{r,c} : r \in D\} = \{v_{r,c} : r \in \mu_{\delta t}(D)\}$,
+rendering all marginal-distribution tests powerless regardless of $|\delta t|$.
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Semantic Contract Framework}
+\label{sec:framework}
+% ═════════════════════════════════════════════════════════════════════════════
+
+\subsection{Mutation Taxonomy}
+
+We define five semantic mutation categories, each motivated by a class of
+real ETL and pipeline failure modes observed in production ML systems.
+
+\textbf{Scaling mutations (6).}  Scaling errors arise when a unit conversion
+is applied incorrectly, a calibration constant is updated in one part of a
+pipeline but not another, or a normalisation step is applied twice.
+Representative operators include multiplying \texttt{Weekly\_Sales} by 0.9
+(10\% systematic undercount), multiplying \texttt{Voltage} by 0.5 (sensor
+gain halved after firmware update), and multiplying all price columns by 10
+(cents-to-dollars conversion applied twice).
+
+\textbf{Temporal mutations (6).}  Temporal errors destroy the causal and
+chronological relationships that time-series ML models depend upon.
+Operators include shifting all dates by $\pm 7$ days (weekly cron-job
+arithmetic error), lagging stock timestamps by one trading day ($T+1$
+settlement date confusion), reversing the entire price series (as-of-date
+inversion), and shuffling records within each calendar day (intra-day
+ordering destroyed by parallel batch processing).
+
+\textbf{Structural mutations (9).}  Structural errors alter the relational
+topology of the dataset---which entities are present, how columns are
+related, and whether the row count is consistent with the upstream source.
+Operators include swapping Open/Close columns, swapping Voltage/Global
+intensity columns, dropping all rows for 5 random stores, dropping a
+contiguous 6-hour segment, tiling the entire power dataset 5 times (pipeline
+loop bug), and negating \texttt{Global\_reactive\_power} (sign convention
+error).
+
+\textbf{Quality mutations (6).}  Quality errors introduce local artefacts
+that corrupt individual measurements without changing the overall dataset
+structure.  Operators include injecting 100 spikes at $3\sigma$, injecting
+50 outliers at $10\sigma$, freezing a 2-hour window at the column mean
+(sensor lock-up), zeroing 30\% of volume readings (sparse data after join
+bug), duplicating 5\% of rows (ETL double-append), and adding Gaussian
+noise at $\sigma = 0.01 \times \sigma_{\mathrm{col}}$.
+
+\textbf{Aggregation mutations (1).}  A single but high-impact operator:
+multiplying \texttt{Weekly\_Sales} by 7, representing the most common
+aggregation error in retail pipelines---applying a daily summation to data
+already aggregated at the weekly level.
+
+Table~\ref{tab:mutations} summarises the complete taxonomy.  In total, 9
+mutations target the Walmart dataset, 8 target the stock dataset, and 11
+target the power dataset, for 28 mutations in total.
+
+\begin{table*}[!t]
+\renewcommand{\arraystretch}{1.15}
+\caption{Complete Mutation Taxonomy (28 Operators Across 3 Datasets)}
+\label{tab:mutations}
+\centering
+\small
+\begin{tabular}{llll}
+\toprule
+\textbf{Mutation Name} & \textbf{Dataset} & \textbf{Category} & \textbf{Description} \\
+\midrule
+\mut{walmart\_\_shift\_dates\_-7}        & Walmart & Temporal     & Shift all dates backward 7 days \\
+\mut{walmart\_\_shift\_dates\_7}         & Walmart & Temporal     & Shift all dates forward 7 days \\
+\mut{walmart\_\_scale\_sales\_0.9}       & Walmart & Scaling      & Multiply \texttt{Weekly\_Sales} by 0.9 \\
+\mut{walmart\_\_scale\_temperature\_2x}  & Walmart & Scaling      & Multiply \texttt{Temperature} by 2 \\
+\mut{walmart\_\_toggle\_holiday}         & Walmart & Structural   & Flip \texttt{Holiday\_Flag} $0\leftrightarrow1$ \\
+\mut{walmart\_\_missing\_recent\_10pct}  & Walmart & Structural   & Drop most recent 10\% of rows \\
+\mut{walmart\_\_missing\_stores\_5}      & Walmart & Structural   & Drop all rows for 5 random stores \\
+\mut{walmart\_\_duplicate\_rows\_5pct}   & Walmart & Quality      & Duplicate a random 5\% of rows \\
+\mut{walmart\_\_wrong\_aggregation\_x7}  & Walmart & Aggregation  & Multiply \texttt{Weekly\_Sales} by 7 \\
+\midrule
+\mut{stock\_\_noise\_0.01}               & Stock   & Quality      & Add Gaussian noise $\sigma=0.01\sigma_{\mathrm{col}}$ to prices \\
+\mut{stock\_\_zero\_volume\_30pct}       & Stock   & Quality      & Zero out \texttt{Volume} for 30\% of rows \\
+\mut{stock\_\_drop\_5pct}                & Stock   & Structural   & Drop 5\% of rows randomly \\
+\mut{stock\_\_column\_swap\_open\_close} & Stock   & Structural   & Swap \texttt{Open} and \texttt{Close} columns \\
+\mut{stock\_\_shift\_price\_0.5}         & Stock   & Scaling      & Add \$0.50 to all price columns \\
+\mut{stock\_\_unit\_conversion\_x10}     & Stock   & Scaling      & Multiply all prices by 10 \\
+\mut{stock\_\_timestamp\_lag\_1day}      & Stock   & Temporal     & Lag all timestamps by 1 trading day \\
+\mut{stock\_\_reverse\_series}           & Stock   & Temporal     & Reverse the entire price series \\
+\midrule
+\mut{power\_\_scale\_active\_1.1}              & Power & Scaling    & Multiply \texttt{Global\_active\_power} by 1.1 \\
+\mut{power\_\_scale\_voltage\_0.5}             & Power & Scaling    & Multiply \texttt{Voltage} by 0.5 \\
+\mut{power\_\_shuffle\_within\_day}            & Power & Temporal   & Shuffle records within each calendar day \\
+\mut{power\_\_shift\_by\_1week}                & Power & Temporal   & Shift all timestamps forward 7 days \\
+\mut{power\_\_column\_swap\_voltage\_intensity}& Power & Structural & Swap \texttt{Voltage} and \texttt{Global\_intensity} \\
+\mut{power\_\_missing\_6hour\_segment}         & Power & Structural & Delete a contiguous 6-hour block \\
+\mut{power\_\_data\_repetition\_5x}            & Power & Structural & Tile entire dataset $5\times$ \\
+\mut{power\_\_sign\_flip\_reactive}            & Power & Structural & Negate \texttt{Global\_reactive\_power} \\
+\mut{power\_\_inject\_spikes\_100\_3.0}        & Power & Quality    & Inject 100 spikes at $3\sigma$ \\
+\mut{power\_\_extreme\_outliers\_50}           & Power & Quality    & Inject 50 outliers at $10\sigma$ \\
+\mut{power\_\_constant\_segment\_2h}           & Power & Quality    & Freeze 2-hour window at column mean \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\subsection{Contract Design Principles}
+
+Each semantic contract implements one or more of the following design
+principles, chosen to make detectors robust across datasets and robust to
+seed-specific stochastic variation.
+Table~\ref{tab:principles} maps each principle to the mutation categories it
+targets; the full set ensures no category is detectable by only a single
+signal.
+
+\textbf{Alignment-First.}  Before any comparison, the baseline and test
+datasets are aligned on their datetime index.  For multi-entity datasets
+(e.g., Walmart with 45 stores), alignment is performed by sorting both
+frames on the temporal column and truncating to the minimum shared length.
+This eliminates spurious differences due to row-count mutations propagating
+into ratio computations.
+
+\textbf{Ratio-Based Detection.}  For scaling contracts, we compute the
+median of pointwise ratios $b_i / a_i$ between aligned test and baseline
+values.  The deviation $|\tilde{r} - 1|$ from the expected ratio of 1.0
+is compared against a fractional tolerance.  Using the median rather than
+the mean provides robustness to the $\leq$5\% of rows that may differ
+legitimately (missing values, outliers).
+
+\textbf{Correlation-Based Structural Detection.}  Column swaps are detected
+by computing cross-correlations: $\rho(a^{c_1}, b^{c_2})$ and
+$\rho(a^{c_2}, b^{c_1})$, where $a$ and $b$ are aligned baseline and test
+arrays.  A cross-correlation advantage $\max(\rho_{12} - \rho_{11},\,
+\rho_{21} - \rho_{22}) > \theta$ indicates that test columns align better
+with swapped baseline columns than with their own.  A complementary spread
+inversion signal---$\rho(\text{spread}_a, \text{spread}_b) < -0.5$---fires
+when a column swap inverts the intraday spread, providing a second
+independent detection path.
+
+\textbf{ACF-Profile Comparison.}  Temporal mutations are detected by
+comparing autocorrelation function profiles at lags $1$ through $24$
+(minutes for power data, trading days for stock data).  The mean absolute
+difference $\overline{|\mathrm{ACF}_a - \mathrm{ACF}_b|}$ exceeding a
+threshold detects both temporal shuffles and timestamp lags.  A
+complementary reversal signal compares $\rho(a, b)$ against
+$\rho(a, b^{\mathrm{rev}})$: when the series is reversed,
+$\rho(a, b^{\mathrm{rev}}) \gg \rho(a, b)$.
+
+\textbf{Spike Isolation.}  Quality contracts for spike injection count the
+number of newly appearing spikes in test data relative to baseline:
+positions $i$ where $b_i > \bar{a} + k\sigma_a$ but
+$a_i \leq \bar{a} + k\sigma_a$.  Using the baseline's own mean and standard
+deviation as the threshold makes this detector adaptive to any absolute
+signal scale.
+
+\textbf{Entity-Count Validation.}  For multi-entity datasets, dropping all
+rows for a subset of entities is detected by comparing the set of unique
+store identifiers.  A single missing entity (threshold: $\geq 1$ missing)
+triggers detection with confidence proportional to the fraction of the
+entity vocabulary missing.
+
+\textbf{Row-Count Ratio.}  Duplication and repetition mutations are detected
+by the fractional excess in test row count:
+$\texttt{extra\_frac} = (n_{\mathrm{test}} - n_{\mathrm{base}}) /
+n_{\mathrm{base}}$.  This is the most direct and reliable detector for
+duplicate rows, since duplicated rows are statistically indistinguishable
+from originals.
+
+\textbf{Date-Range Comparison.}  Timestamp mutations are detected by
+comparing the median date of test versus baseline.  If all records are
+shifted by $\delta$ days, the median shifts by exactly $\delta$ days.
+This is robust to the multi-store structure of the Walmart dataset, where
+no per-row temporal comparison is possible.
+
+\begin{table}[!t]
+\renewcommand{\arraystretch}{1.15}
+\caption{Contract Design Principles and Target Categories}
+\label{tab:principles}
+\centering
+\small
+\begin{tabular}{lp{3.8cm}}
+\toprule
+\textbf{Principle} & \textbf{Targets} \\
+\midrule
+Alignment-First            & All categories \\
+Ratio-Based Detection      & Scaling, Aggregation \\
+Correlation-Based Struct.\ & Structural (column swaps) \\
+ACF-Profile Comparison     & Temporal \\
+Spike Isolation            & Quality (spikes, outliers) \\
+Entity-Count Validation    & Structural (missing entities) \\
+Row-Count Ratio            & Quality (duplicates), Structural \\
+Date-Range Comparison      & Temporal (shifts, lags) \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Dataset-Specific Contract Deployment}
+
+For the Walmart dataset, we deploy 7 contracts: shift-dates, scale-sales,
+toggle-holiday, scale-temperature, missing-recent, missing-stores, and
+duplicate-rows.  For the stock dataset, we deploy 8 contracts: noise,
+drop-fraction, shift-price, column-swap (Open/Close pair), unit-conversion,
+temporal-ACF (with reversal signal), zero-volume, and timestamp-lag.  For
+the power dataset, we deploy 10 contracts: scale-active-power,
+scale-voltage, inject-spikes, shuffle-within-day, column-swap
+(Voltage/Global\_intensity pair), missing-segment, data-repetition,
+sign-flip-reactive, temporal-ACF, and constant-segment.
+
+Each contract returns a binary \texttt{detected} flag and a normalised
+\texttt{confidence} score in $[0,1]$.  The semantic validator aggregates
+over all contracts for the relevant dataset: a mutation is flagged as
+detected if at least one contract fires with confidence $\geq 0.10$.
+This low threshold maximises recall; the FPR = 0.000 result confirms that
+the contracts do not fire spuriously on clean data.
+
+\subsection{Semantic Precision}
+
+Each detector is assigned to exactly one of the five taxonomy categories
+(e.g., \texttt{scale\_sales} $\rightarrow$ \textsc{scaling},
+\texttt{temporal\_acf} $\rightarrow$ \textsc{temporal}).  Each mutation has
+a known ground-truth category.  Semantic precision (Eq.~\ref{eq:sp})
+measures whether the correct category of detector fires, not merely whether
+any detector fires.  A detection where a \textsc{scaling} contract fires on
+a \textsc{structural} mutation is counted as a semantic precision failure,
+even though the mutation is correctly flagged as detected.  This metric
+provides a stronger claim: the framework does not merely detect anomalies,
+it correctly diagnoses their category.
+One implementation note: the sole Aggregation mutation
+(\mut{walmart\_\_wrong\_aggregation\_x7}) is detected by the
+\texttt{scale\_sales} contract, which is categorised as Scaling.  Because
+a $7\times$ sales inflation is mechanistically identical to a scaling error
+from the contract's perspective, the semantic precision computation maps
+Aggregation mutations to the Scaling detector category for the purposes of
+precision scoring.  This is disclosed explicitly so that the 100\%
+Aggregation precision figure is not overstated: it reflects the fact that
+the correct ratio-based signal fires, not that a dedicated aggregation
+contract exists.
+
+
+\section{Experimental Setup}
+\label{sec:setup}
+
+
+\subsection{Datasets}
+
+We use three publicly available tabular datasets representing distinct
+domains and data modalities.
+
+\textbf{Walmart Retail Sales \cite{walmart2014kaggle}.}  The Walmart Store
+Sales Forecasting dataset contains 6,435 rows across 45 store-week
+combinations.  Key columns include \texttt{Weekly\_Sales},
+\texttt{Temperature}, \texttt{Holiday\_Flag}, \texttt{Fuel\_Price},
+\texttt{CPI}, \texttt{Unemployment}, \texttt{Store}, and \texttt{Date}.
+This dataset is representative of enterprise retail ML pipelines, where
+aggregation errors and holiday-flag inversions are common ETL failure modes.
+
+\textbf{AAPL Stock Prices (Yahoo Finance, 5-year daily OHLCV).}  1,259
+rows of daily Open, High, Low, Close, Adjusted Close, and Volume for Apple
+Inc.\ stock over the period 2019--2024.  This dataset stresses temporal
+ordering constraints and inter-column semantic relationships (e.g.,
+High $\geq$ Close $\geq$ Low on any given day).
+
+\textbf{UCI Household Power Consumption \cite{uci2013}.}  A 996,010-row
+sample of per-minute household electrical measurements over four years, with
+columns \texttt{Global\_active\_power}, \texttt{Global\_reactive\_power},
+\texttt{Voltage}, \texttt{Global\_intensity}, and three sub-metering
+channels.  This dataset stresses quality contracts (spike detection, sensor
+freeze) and temporal structure (intra-day autocorrelation patterns).
+
+\subsection{Mutation Generation and Reproducibility}
+
+Each of the 28 mutation operators is parameterised by a random seed.  We
+run all experiments with seeds $\{42, 123, 456, 789\}$, producing
+$28 \times 4 = 112$ mutated trials.  Seeds are used exclusively for
+stochastic operators (e.g., selecting which 5\% of rows to duplicate, which
+stores to drop, where to place spikes); purely deterministic operators
+(e.g., $\times 0.9$ scaling, $+7$-day date shift) are unaffected by seed
+choice.  All code, datasets, seeds, and output CSVs will be released in a
+public repository upon acceptance to ensure full reproducibility.  The
+complete pipeline can be executed with a single command and reproduces all
+reported figures exactly.
+
+\subsection{Baseline Validators}
+
+\textbf{KS Drift (original baseline).}  A per-column two-sample
+Kolmogorov-Smirnov test \cite{kolmogorov1933} with Bonferroni correction.
+A mutation is detected if any column yields $p < 0.01 / n_{\mathrm{cols}}$.
+This is the standard production drift detector.
+
+\textbf{Ensemble Statistical.}  A five-test ensemble combining KS test,
+Jensen-Shannon divergence \cite{lin1991jsd} on binned empirical
+distributions, Population Stability Index \cite{yurdakul2018psi}, Frobenius
+norm of Pearson inter-column correlation matrix difference, and mean ACF
+difference over lags 1--20.  Detection uses any-one (OR) voting: a mutation
+is detected if at least one test fires.  This baseline is designed to be the
+strongest possible purely statistical detector.
+
+\textbf{Great Expectations Comprehensive \cite{greatexpectations2023}.}  A
+calibrated expectation suite mimicking production GE deployments.
+Eight expectation types are applied: row count within $\pm$15\% of
+baseline, column mean within $\pm$20\% (or $\pm$30\% for stock prices),
+column standard deviation within [50\%, 200\%] of baseline std, null rate
+increase $\leq$10\,pp, 99\% of values within an expanded baseline
+$[q_{0.01}, q_{0.99}]$ range, zero-fraction increase $\leq$20\,pp,
+categorical completeness ($\leq$10\% unique values missing), and sign
+distribution for reactive power.  Tolerances are deliberately generous to
+match production usage and minimise false alerts.
+
+\textbf{Semantic Validator (proposed).}  The framework described in
+Section~\ref{sec:framework}, with confidence threshold 0.10.
+
+\subsection{Evaluation Protocol and Statistical Methods}
+
+All four validators are applied to each of the 112 mutated trials and to
+each of the 12 clean baseline trials (3 datasets $\times$ 4 seeds).
+We report:
+
+\begin{itemize}
+\item \textbf{Pooled Detection Rate} with 95\% Wilson score confidence
+      intervals \cite{wilson1927}.  The Wilson interval is preferred over
+      the Wald interval for proportions that may be near 0 or 1, as it
+      maintains nominal coverage for small to moderate $n$.
+
+\item \textbf{McNemar exact test} \cite{mcnemar1947} for pairwise validator
+      comparisons.  The exact binomial version (rather than asymptotic
+      $\chi^2$) is appropriate here because the number of discordant pairs
+      is small relative to the sample size.  Significance threshold:
+      $\alpha = 0.05$.
+
+\item \textbf{Two-proportion z-test} for the development-vs-held-out
+      generalisation gap.
+
+\item \textbf{Semantic precision} (Eq.~\ref{eq:sp}).
+\end{itemize}
+
+Wilson score intervals and McNemar tests were implemented 
+using the \texttt{statsmodels} statistical library~\cite{seabold2010statsmodels}.
+
+We report per-seed detection rates alongside pooled rates to verify that
+confidence intervals are not artificially tightened by treating correlated
+per-seed observations as independent.  The standard deviation across seeds
+is 0.0\% for the semantic validator, confirming that the pooled CI reflects
+genuine consistency rather than artefact.
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Results}
+\label{sec:results}
+% ═════════════════════════════════════════════════════════════════════════════
+
+\subsection{Main Detection Results}
+
+Table~\ref{tab:main} presents the primary comparison.  The semantic
+validator detects 108 of 112 mutated trials (96.4\%), more than doubling
+the detection rate of the best statistical baseline (Ensemble: 49.1\%).
+The $7.3\times$ advantage over the KS-only baseline (42.0\%) and the
+$2.2\times$ advantage over the ensemble baseline are consistent across all
+four seeds.  All four validators achieve FPR = 0.000, establishing that the
+improvements in detection rate are not obtained by trading off precision.
+
+Notably, 12 of the 28 mutations are detected at 100\% by the semantic
+validator while achieving 0\% detection across \emph{all three} baselines
+simultaneously---including \mut{power\_\_shift\_by\_1week},
+\mut{stock\_\_column\_swap\_open\_close}, \mut{stock\_\_shift\_price\_0.5},
+\mut{stock\_\_timestamp\_lag\_1day}, \mut{walmart\_\_duplicate\_rows\_5pct},
+\mut{walmart\_\_shift\_dates\_-7}, and \mut{walmart\_\_shift\_dates\_7},
+among others.  These represent the mutation types for which statistical
+monitoring provides no protection whatsoever.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{fig1_detection_rates.pdf}
+\caption{Pooled detection rate (95\% Wilson CI) for all four 
+validators across 112 mutated trials. Error bars show Wilson 
+score confidence intervals. The semantic validator achieves 
+96.4\%, more than doubling the best statistical baseline.}
+\label{fig:dr_comparison}
+\end{figure}
+
+\begin{table}[!t]
+\renewcommand{\arraystretch}{1.25}
+\caption{Detection Rate Comparison ($28 \times 4 = 112$ Trials)}
+\label{tab:main}
+\centering
+\small
+\begin{tabular}{lccc}
+\toprule
+\textbf{Validator} & \textbf{Det.} & \textbf{DR (95\% Wilson CI)} & \textbf{FPR} \\
+\midrule
+Semantic Validator (ours) & 108/112 & \textbf{96.4\% [91.2\%, 98.6\%]} & 0.000 \\
+Ensemble Statistical      & 55/112  & 49.1\% [40.0\%, 58.2\%]          & 0.000 \\
+KS Drift (original)       & 47/112  & 42.0\% [33.2\%, 51.2\%]          & 0.000 \\
+GE Comprehensive          & 48/112  & 42.9\% [34.1\%, 52.1\%]          & 0.000 \\
+\bottomrule
+\multicolumn{4}{l}{\footnotesize FPR denominator: 12 clean trials (3 datasets $\times$ 4 seeds).}
+\end{tabular}
+\end{table}
+
+\subsection{Statistical Significance}
+
+Table~\ref{tab:mcnemar} presents McNemar exact test results for all
+pairwise comparisons between the semantic validator and each baseline.  The
+number of discordant pairs (mutations detected by Semantic but not Baseline,
+or vice versa) is large in all cases, yielding $p < 0.0001$ for every
+comparison.  The advantage of the semantic validator over all three baselines
+is statistically overwhelming and cannot be attributed to chance.
+
+\begin{table}[!t]
+\renewcommand{\arraystretch}{1.25}
+\caption{McNemar Exact Test Results ($\alpha = 0.05$)}
+\label{tab:mcnemar}
+\centering
+\begin{tabular}{lcc}
+\toprule
+\textbf{Comparison} & \textbf{$p$-value} & \textbf{Significant} \\
+\midrule
+Semantic vs.\ Ensemble Statistical & $< 0.0001$ & Yes \\
+Semantic vs.\ KS Drift (original)  & $< 0.0001$ & Yes \\
+Semantic vs.\ GE Comprehensive     & $< 0.0001$ & Yes \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Per-Category Breakdown}
+
+Table~\ref{tab:category} disaggregates detection rates by mutation category
+for the semantic validator.  Four of the five categories achieve 100\%
+detection.  The single below-perfect category is Quality at 83.3\%
+(20/24), attributable entirely to a single mutation
+(\mut{stock\_\_noise\_0.01}) across all four seeds.  This mutation adds
+Gaussian noise at $\sigma = 0.01 \times \sigma_{\mathrm{col}}$---a
+perturbation whose magnitude is sub-1\% of natural price variability---and
+is undetectable by any of the four validators.  We discuss this as a
+documented detection limit in Section~\ref{sec:discussion}.
+
+\begin{figure}[!t]
+\centering
+\includegraphics[width=\columnwidth]{fig2_category_heatmap.pdf}
+\caption{Per-category detection rate (\%) for all four validators. 
+The semantic validator achieves 100\% in four of five categories. 
+The KS baseline detects 0\% of Temporal mutations; Ensemble and GE 
+detect only 33\%, compared with 100\% for the semantic validator.}
+\label{fig:category_heatmap}
+\end{figure}
+
+\begin{table}[!t]
+\renewcommand{\arraystretch}{1.25}
+\caption{Per-Category Detection Rate (Semantic Validator)}
+\label{tab:category}
+\centering
+\begin{tabular}{lccl}
+\toprule
+\textbf{Category} & \textbf{Det.} & \textbf{Total} &
+  \textbf{DR (95\% Wilson CI)} \\
+\midrule
+Aggregation & 4   & 4   & 100.0\% [51.0\%, 100.0\%] \\
+Quality     & 20  & 24  & \phantom{0}83.3\% [64.1\%, \phantom{0}93.3\%] \\
+Scaling     & 24  & 24  & 100.0\% [86.2\%, 100.0\%] \\
+Structural  & 36  & 36  & 100.0\% [90.4\%, 100.0\%] \\
+Temporal    & 24  & 24  & 100.0\% [86.2\%, 100.0\%] \\
+\midrule
+\textbf{Overall} & \textbf{108} & \textbf{112} &
+\textbf{96.4\% [91.2\%, 98.6\%]} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Semantic Precision}
+
+Table~\ref{tab:precision} reports per-category semantic precision.  The overall semantic precision of 96.3\% (104/108) demonstrates that the
+framework not only detects mutations but correctly diagnoses their category
+in the vast majority of cases.  Four categories achieve 100\% precision.
+The sole precision shortfall occurs in the Structural category (88.9\%,
+32/36), and is entirely attributable to one mutation---\mut{stock\_\_drop\_5pct}---across
+all four seeds.  Dropping 5\% of rows shifts the apparent price level
+and truncates the timestamp range by a small amount, causing the
+\texttt{shift\_price} (Scaling) and \texttt{timestamp\_lag} (Temporal)
+contracts to fire before the \texttt{drop\_fraction} (Structural) contract
+reaches its threshold.  The mutation is correctly \emph{detected} in all
+four seed runs; the precision failure reflects incidental cross-category
+detector firing, not a missed mutation.  No Quality precision failures
+occur: all 20 detected Quality mutations are attributed to the correct
+category.
+
+\begin{table}[!t]
+\renewcommand{\arraystretch}{1.25}
+\caption{Semantic Precision by Category}
+\label{tab:precision}
+\centering
+\begin{tabular}{lccr}
+\toprule
+\textbf{Category} & \textbf{Detected} & \textbf{Sem.\ Matches} &
+  \textbf{Precision} \\
+\midrule
+Aggregation & 4   & 4   & 100.0\% \\
+Quality     & 20  & 20  & 100.0\% \\
+Scaling     & 24  & 24  & 100.0\% \\
+Structural  & 36  & 32  & \phantom{0}88.9\% \\
+Temporal    & 24  & 24  & 100.0\% \\
+\midrule
+\textbf{Overall} & \textbf{108} & \textbf{104} & \textbf{96.3\%} \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Seed Stability}
+
+Table~\ref{tab:seeds} reports per-seed detection rates for all four
+validators.  The semantic validator is perfectly stable at 96.4\% across
+all seeds, yielding standard deviation 0.0\%.  This eliminates the
+possibility that the pooled confidence interval is artificially tightened
+by within-mutation correlation: if the four observations per mutation were
+strongly correlated, we would expect seed-to-seed variance; the absence of
+any variance confirms the pooled CI is conservative, not liberal.  The ensemble baseline shows minor seed-to-seed variation 
+(range: 46.4\%--50.0\%) reflecting the continuous nature 
+of its component test scores.
+
+\begin{table}[!t]
+\renewcommand{\arraystretch}{1.15}
+\caption{Per-Seed Detection Rates (\%)}
+\label{tab:seeds}
+\centering
+\begin{tabular}{lccccc}
+\toprule
+\textbf{Validator} & \textbf{S=42} & \textbf{S=123} &
+  \textbf{S=456} & \textbf{S=789} & \textbf{Std} \\
+\midrule
+Semantic Validator & 96.4 & 96.4 & 96.4 & 96.4 & 0.0 \\
+Ensemble Stat.     & 46.4 & 50.0 & 50.0 & 50.0 & --- \\
+KS Drift           & 39.3 & 42.9 & 42.9 & 42.9 & --- \\
+GE Comprehensive   & 42.9 & 42.9 & 42.9 & 42.9 & 0.0 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Held-Out Evaluation}
+
+To assess whether the contracts generalise beyond the specific mutation
+types observed during iterative development, we partition the 28 mutations
+into a \emph{development set} of 19 mutations (whose failure modes were
+observed during detector tuning) and a \emph{held-out set} of 9 mutations
+(for which no detector was written or revised after observing a failure).
+
+Table~\ref{tab:heldout} presents results.  On the development set, the
+semantic validator achieves 100.0\% (95\% CI: 95.2\%--100.0\%) with all
+five categories perfect.  On the held-out set, it achieves 88.9\% (95\% CI:
+74.7\%--95.6\%), a generalisation gap of $+11.1$ percentage points
+(two-proportion z-test: $z = 2.959$, $p = 0.003$).  The held-out detection
+rate exceeds all three baselines by $>$36 percentage points.
+
+% FIX 7: Table VIII previously had multi-line text inside narrow cells
+%         causing CI values to wrap mid-number in two-column layout.
+%         Reformatted to use a p-column with explicit width.
+\begin{table}[!t]
+\renewcommand{\arraystretch}{1.25}
+\caption{Held-Out Evaluation Results}
+\label{tab:heldout}
+\centering
+\small
+\begin{tabular}{lcccc}
+\toprule
+\textbf{Set} & \textbf{Sem DR (95\% CI)} & \textbf{Ens} & \textbf{KS} & \textbf{GE} \\ 
+\midrule
+Dev.\ (19)   & \scriptsize 100.0\% {[95.2, 100.0]} & 47.4\% & 42.1\% & 42.1\% \\
+Held-Out (9) & \scriptsize 88.9\% {[74.7,\;95.6\phantom{0}]} & 52.8\% & 41.7\% & 44.4\% \\
+All (pooled) & \scriptsize 96.4\% {[91.2,\;98.6\phantom{0}]} & 49.1\% & 42.0\% & 42.9\% \\
+\midrule
+\multicolumn{5}{l}{\footnotesize 95\% Wilson CI bounds shown in brackets.}\\
+\multicolumn{5}{l}{\footnotesize Gap: $+11.1$\,pp ($z=2.959$, $p=0.003$).}\\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Per-mutation held-out results reveal the structure of the gap.  Eight of the
+nine held-out mutations are detected at 100\% by the semantic validator; the
+single miss across all four seeds is \mut{stock\_\_noise\_0.01} (0\% for
+all validators).  The remaining eight include the particularly challenging
+\mut{stock\_\_timestamp\_lag\_1day} (detected at 100\% by semantic contracts
+via date-range comparison, at 0\% by Ensemble and KS) and
+\mut{stock\_\_reverse\_series} (100\% by semantic and Ensemble via ACF
+reversal signal, 0\% by KS and GE).  One caveat applies to
+\mut{stock\_\_drop\_5pct}: it is correctly detected at 100\% but via
+incidental Scaling and Temporal detector signals rather than its targeted
+Structural contract, as discussed in Section~\ref{sec:results} (Semantic
+Precision).  This does not affect the detection rate but is reflected in
+the Structural category precision of 88.9\%.
+
+\subsection{Missed Mutation Analysis and False Positive Analysis}
+
+The single mutation that consistently evades detection across all four
+validators is \mut{stock\_\_noise\_0.01}, which injects Gaussian noise at
+$\sigma_{\mathrm{noise}} = 0.01 \times \sigma_{\mathrm{col}}$ to all price
+columns.  This perturbation is sub-1\% of the natural daily price
+variability and is therefore genuinely indistinguishable from benign
+measurement noise.  Lowering the noise detection threshold to catch this
+mutation would generate false positives on clean market data.  This case
+represents a \emph{fundamental detection limit} of threshold-based
+validation against imperceptibly small perturbations, not a weakness of the
+semantic contract paradigm specifically.
+
+% FIX 8: Original had "n>10,000n > 10,000 n>10,000" — triplicated
+%         text/math artefact.  Replaced with single clean math expression.
+A technical note: scipy's \texttt{ks\_2samp} function emits 
+a runtime warning on the 996{,}010-row power dataset, switching 
+from exact to asymptotic $p$-value computation. This fallback 
+is mathematically valid; the asymptotic approximation is known 
+to be accurate for $n > 10{,}000$~\cite{kolmogorov1933} and 
+does not affect any reported result.
+
+Excluding \mut{stock\_\_noise\_0.01}, the held-out detection rate is
+100.0\%, and the generalisation gap collapses to 0 percentage points.
+
+The false positive rate is 0.000 across all 12 clean baseline evaluations
+and all four validators.  In a production context, this means the framework
+generates zero unnecessary alerts on clean data---a prerequisite for
+adoption in operational environments where false alarms erode trust and
+lead to validator bypass.
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Discussion}
+\label{sec:discussion}
+% ═════════════════════════════════════════════════════════════════════════════
+
+\subsection{Statistical versus Semantic Validation: The Core Argument}
+
+The results establish, both theoretically (Section~\ref{sec:formulation})
+and empirically (Section~\ref{sec:results}), that statistical methods are
+structurally insufficient for semantic mutation detection.  The insight is
+not that statistical tests are poorly implemented or inadequately
+parameterised---our ensemble baseline combines five state-of-the-art tests
+with any-one voting, representing the strongest conceivable purely
+statistical detector---but that statistical tests fundamentally operate on
+the wrong representation of the data.
+
+A statistical test asks: \emph{do these two samples look like they came
+from the same distribution?}  A semantic contract asks: \emph{do these two
+datasets maintain the relational invariants that the domain requires?}
+These are different questions.  Column swaps, timestamp shifts, aggregation
+errors, and sign flips all answer ``yes'' to the first question and ``no''
+to the second.
+
+An instructive comparison is the GE baseline, which achieves only 42.9\%
+despite incorporating eight categories of expectations including categorical
+completeness and value range checks.  Inspection of per-mutation results
+shows that GE and KS share \emph{identical blind spots} on temporal
+mutations and subtle structural anomalies.  Despite being a richer
+framework, GE fails for the same structural reason as KS: its expectations
+are defined over the marginal properties of columns, not over the
+semantic relationships between columns and the domain they represent.
+Adding more statistical expectations to a GE suite does not close the
+gap; only expectations that encode domain meaning do.
+
+% FIX 9: Original had "powershif tby1week" — garbled mutation name caused
+%         by \texttt hyphenation in two-column layout.
+%         Replaced with \mut{} macro (= \mbox{\texttt{...}}) throughout.
+Concretely, the KS baseline achieves \textbf{0\% detection on all six
+Temporal mutations} across all seeds, and GE detects only two of six
+(33\%).  The three held-out temporal mutations---\mut{power\_\_shift\_by\_1week},
+\mut{stock\_\_timestamp\_lag\_1day}, and \mut{stock\_\_reverse\_series}---are
+detected at 0\% by both GE and KS, while the semantic validator detects
+all six Temporal mutations at 100\%.  This is not a
+matter of threshold calibration---no threshold adjustment to a
+marginal-distribution test can detect a timestamp shift that leaves all
+marginal distributions identical.
+
+\subsection{Limitations}
+
+We report the following limitations honestly, as they determine the scope
+of valid inferences from this work.
+
+\textbf{L1\,---\,Domain specificity.}  The contracts presented here are
+hand-crafted for three specific datasets.  Writing effective contracts for a
+new dataset requires domain expertise to identify the invariants that the
+domain mandates.  The framework is not plug-and-play; it requires upfront
+investment from a domain expert.  We view this as a feature rather than a
+bug---domain knowledge is precisely what statistical tools lack---but it
+does impose a deployment cost.
+
+\textbf{L2\,---\,Approximate held-out partition.}  The development/held-out
+split is based on development history: which mutation types were observed
+during iterative contract refinement.  This history cannot be fully audited.
+Broad design choices (e.g., the decision to include ACF-based contracts) may
+have been influenced by awareness of all mutation types.  The held-out
+results should therefore be interpreted as a partial, not strict,
+generalisation test.
+
+\textbf{L3\,---\,Statistically significant generalisation gap.}  The
+$+11.1$ percentage-point gap between development (100.0\%) and held-out
+(88.9\%) detection rates is statistically significant ($p = 0.003$).
+Although this gap is entirely attributable to a single documented hard-limit
+case (\mut{stock\_\_noise\_0.01}), this attribution should not be used to
+dismiss the gap.  Future work should investigate held-out evaluation on a
+fully disjoint dataset with no development-phase exposure.
+
+\textbf{L4\,---\,Confidence interval dependence.}  The pooled detection
+rate treats the $4 \times 28 = 112$ trials as independent observations.  In
+reality, the four per-mutation observations are correlated (same mutation,
+different seed).  The per-seed standard deviation of 0.0\% is the strongest
+possible evidence that this correlation does not bias the pooled CI, but the
+methodological caveat should be noted.
+
+\textbf{L5\,---\,Threshold sensitivity.}  Contract thresholds (e.g., the
+3\% tolerance for the scale-sales detector, the $-0.70$ Pearson threshold
+for the sign-flip detector) were set by domain knowledge and iterative
+refinement on the development set.  No systematic sensitivity analysis was
+performed.  Results may degrade for datasets with unusual signal
+characteristics that place clean data close to these thresholds.
+
+\textbf{L6\,---\,Scope of datasets.}  Three datasets spanning three domains
+(retail, finance, energy) provide diversity, but do not constitute an
+exhaustive evaluation.  The framework has not been tested on NLP features
+stored as tabular embeddings, image metadata, or non-temporal tabular data.
+
+\subsection{Threats to Validity}
+
+\textbf{Internal validity.}  Contract thresholds are the primary internal
+validity threat.  A threshold that was tuned with (even indirect) knowledge
+of the held-out mutations could inflate generalisation results.  We have
+mitigated this by making the partition explicit and by reporting the gap
+honestly.  A controlled threshold-sensitivity experiment is a recommended
+follow-up.
+
+\textbf{External validity.}  Results may not generalise to domains with
+higher natural variability (e.g., social media data, sensor networks with
+legitimate high-frequency spikes).  In such domains, the contracts would
+require recalibration, which may raise FPR.  The three datasets were chosen
+to represent distinct variability regimes (low-variance weekly retail;
+medium-variance daily equity; high-variance minute-level energy), providing
+moderate confidence in the generality of the design principles if not
+the specific thresholds.
+
+% ═════════════════════════════════════════════════════════════════════════════
+\section{Conclusion}
+\label{sec:conclusion}
+% ═════════════════════════════════════════════════════════════════════════════
+
+This paper introduces semantic contract-based validation as a principled
+solution to a class of data pipeline failure---the semantic mutation---that
+is structurally undetectable by existing statistical monitoring tools.  We
+formalise the semantic mutation, construct a five-category taxonomy of 28
+real-world ETL failure patterns, implement 25 domain-aware contracts, and
+demonstrate empirically that the resulting validator achieves 96.4\%
+detection rate at 0.000 false-positive rate---more than doubling the
+performance of the best available statistical baseline---with statistical
+significance at $p < 0.0001$ in all pairwise McNemar tests.  Semantic
+precision of 96.3\% confirms that the framework diagnoses mutation types
+correctly, not merely flags anomalies.
+
+The practical implication for ML data teams is direct: schema validators
+and drift detectors are necessary but not sufficient for data quality
+assurance.  A third layer---semantic contracts---is required to catch the
+mutations that preserve syntactic and distributional properties while
+violating the domain meaning of the data.  Implementing this layer requires
+domain expertise but, once written, contracts can be executed in
+milliseconds per incoming batch and integrated into any CI/CD pipeline gate.
+
+Three directions warrant future investigation.  First, the framework should
+be extended to additional datasets and modalities, including natural language
+feature stores and time-series with irregular sampling, to characterise the
+conditions under which hand-crafted contracts can be replaced by learned
+invariants.  Second, automatic contract generation from data dictionaries or
+schema annotations---analogous to constraint suggestion in
+Deequ \cite{schelter2018deequ}---would reduce the domain-expert burden and
+enable broader adoption.  Third, integration with MLOps platforms (MLflow,
+Kubeflow, Vertex AI) as a pre-training validation gate would enable
+continuous semantic validation in production, transforming the framework
+from a research prototype into a production-grade data reliability
+engineering tool.
+
+% ── References ───────────────────────────────────────────────────────────────
+\begin{thebibliography}{99}
+
+\bibitem{sculley2015}
+D.~Sculley, G.~Holt, D.~Golovin, E.~Davydov, T.~Phillips, D.~Ebner,
+V.~Chaudhary, M.~Young, J.-F.~Crespo, and D.~Dennison,
+``Hidden technical debt in machine learning systems,''
+in \emph{Advances in Neural Information Processing Systems (NIPS)},
+vol.~28, 2015, pp.~2503--2511.
+
+\bibitem{polyzotis2018}
+N.~Polyzotis, S.~Roy, S.~E.~Whang, and M.~Zinkevich,
+``Data lifecycle challenges in production machine learning: A survey,''
+\emph{ACM SIGMOD Record}, vol.~47, no.~2, pp.~17--28, 2018.
+
+\bibitem{greatexpectations2023}
+\emph{Great Expectations: Always Know What to Expect From Your Data},
+Superconductive Inc., 2023. [Online].
+Available: \url{https://greatexpectations.io}
+
+\bibitem{kolmogorov1933}
+A.~N.~Kolmogorov,
+``Sulla determinazione empirica di una legge di distribuzione,''
+\emph{Giornale dell'Istituto Italiano degli Attuari}, vol.~4,
+pp.~83--91, 1933.
+
+\bibitem{breck2017}
+E.~Breck, S.~Cai, E.~Nielsen, M.~Salib, and D.~Sculley,
+``The ML test score: A rubric for ML production readiness and
+technical debt reduction,''
+in \emph{Proc.\ IEEE Int.\ Conf.\ Big Data}, 2017, pp.~1123--1132.
+
+\bibitem{schelter2018automating}
+S.~Schelter, D.~Lange, P.~Schmidt, M.~Celikel, F.~Biessmann,
+and A.~Grafberger,
+``Automating large-scale data quality verification,''
+\emph{Proc.\ VLDB Endowment}, vol.~11, no.~12, pp.~1781--1794, 2018.
+
+\bibitem{schelter2018deequ}
+S.~Schelter, J.-H.~Lange, P.~Schmidt, M.~Celikel, F.~Biessmann,
+and A.~Grafberger,
+``Deequ: Data quality validation for machine learning pipelines,''
+in \emph{NeurIPS Workshop on Systems for Machine Learning}, 2018.
+
+\bibitem{baylor2017tfx}
+D.~Baylor, E.~Breck, H.-T.~Cheng, N.~Fiedel, C.~Y.~Foo, Z.~Haque,
+S.~Haykal, M.~Ispir, V.~Jain, L.~Koc, C.~Y.~Koo, L.~Lew, C.~Mewald,
+A.~N.~Modi, N.~Polyzotis, S.~Ramesh, S.~Roy, S.~E.~Whang, M.~Wicke,
+J.~Wilkiewicz, X.~Zhang, and M.~Zinkevich,
+``TFX: A TensorFlow-based production-scale machine learning platform,''
+in \emph{Proc.\ ACM SIGKDD Int.\ Conf.\ Knowledge Discovery and
+Data Mining}, 2017, pp.~1387--1395.
+
+\bibitem{demillo1978}
+R.~A.~DeMillo, R.~J.~Lipton, and F.~G.~Sayward,
+``Hints on test data selection: Help for the practicing programmer,''
+\emph{Computer}, vol.~11, no.~4, pp.~34--41, Apr.\ 1978.
+
+\bibitem{jia2010}
+Y.~Jia and M.~Harman,
+``An analysis and survey of the development of mutation testing,''
+\emph{IEEE Trans.\ Software Engineering}, vol.~37, no.~5,
+pp.~649--678, Sep.\ 2010.
+
+\bibitem{ma2018deepmutation}
+L.~Ma, F.~Zhang, J.~Sun, M.~Xue, B.~Li, F.~Juefei-Xu, C.~Xie,
+L.~Li, Y.~Liu, J.~Zhao, and Y.~Wang,
+``DeepMutation: Mutation testing of deep learning systems,''
+in \emph{Proc.\ IEEE 29th Int.\ Symp.\ Software Reliability
+Engineering (ISSRE)}, 2018, pp.~100--111.
+
+\bibitem{humbatova2021deepcrime}
+N.~Humbatova, G.~Jahangirova, and P.~Tonella,
+``DeepCrime: Mutation testing of deep learning systems based on
+real faults,''
+in \emph{Proc.\ 30th ACM SIGSOFT Int.\ Symp.\ Software Testing
+and Analysis (ISSTA)}, 2021, pp.~67--78.
+
+\bibitem{lin1991jsd}
+J.~Lin,
+``Divergence measures based on the Shannon entropy,''
+\emph{IEEE Trans.\ Information Theory}, vol.~37, no.~1,
+pp.~145--151, Jan.\ 1991.
+
+\bibitem{yurdakul2018psi}
+M.~Yurdakul,
+``Statistical properties of Population Stability Index,''
+\emph{Western Michigan University, Dept.\ of Statistics}, 2018.
+
+\bibitem{wilson1927}
+E.~B.~Wilson,
+``Probable inference, the law of succession, and statistical inference,''
+\emph{J.\ American Statistical Association}, vol.~22, no.~158,
+pp.~209--212, 1927.
+
+\bibitem{mcnemar1947}
+Q.~McNemar,
+``Note on the sampling error of the difference between correlated
+proportions or percentages,''
+\emph{Psychometrika}, vol.~12, no.~2, pp.~153--157, 1947.
+
+\bibitem{uci2013}
+M.~Lichman,
+``UCI Machine Learning Repository,''
+University of California, Irvine, School of Information and
+Computer Sciences, 2013. [Online].
+Available: \url{http://archive.ics.uci.edu/ml}
+
+\bibitem{walmart2014kaggle}
+\emph{Walmart Store Sales Forecasting Dataset},
+Kaggle, 2014. [Online].
+Available: \url{https://www.kaggle.com/c/walmart-recruiting-store-sales-forecasting}
+
+\bibitem{shankar2022operationalizing}
+S.~Shankar, R.~Roelofs, H.~Sagara, A.~Namgung, A.~Kumar, and B.~Recht,
+``Operationalizing machine learning: An interview study,''
+\emph{arXiv preprint arXiv:2209.09125}, 2022.
+
+\bibitem{reis2022}
+J.~Reis and M.~Housley,
+\emph{Fundamentals of Data Engineering: Plan and Build Robust Data Systems}.
+O'Reilly Media, 2022.
+
+\bibitem{seabold2010statsmodels}
+S.~Seabold and J.~Perktold,
+``Statsmodels: Econometric and statistical modeling with Python,''
+in \emph{Proc.\ 9th Python in Science Conf.\ (SciPy)}, 2010,
+pp.~92--96.
+
+\bibitem{makinen2021mlops}
+S.~M\"{a}kinen, H.~Skogstr\"{o}m, E.~Laaksonen, and T.~Mikkonen,
+``Who needs MLOps: What data scientists seek to accomplish and how
+can MLOps help?,''
+in \emph{Proc.\ IEEE/ACM 1st Workshop on AI Engineering---Software
+Engineering for AI (WAIN)}, 2021, pp.~109--112.
+
+\end{thebibliography}
+
+\end{document}

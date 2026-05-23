@@ -1,0 +1,4 @@
+set,n_mutations,sem_detected,sem_total,sem_dr,sem_ci,ens_dr,ks_dr,ge_dr,z_stat,p_value
+Development Set,19,76,76,1.0000,"100.0% [95.2%, 100.0%]",0.4737,0.4211,0.4211,,
+Held-Out Set,9,32,36,0.8889,"88.9% [74.7%, 95.6%]",0.5278,0.4167,0.4444,2.959,0.0031
+All Mutations (pooled),28,108,112,0.9643,"96.4% [91.2%, 98.6%]",0.4911,0.4196,0.4286,,

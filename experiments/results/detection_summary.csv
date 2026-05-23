@@ -1,0 +1,5 @@
+Validator,Mean DR,Std DR,Pooled DR (95% CI),FPR
+Semantic Validator,96.4%,±0.0%,"96.4% [91.2%, 98.6%]",0.000
+Ensemble Statistical,49.1%,±1.8%,"49.1% [40.0%, 58.2%]",0.000
+KS Drift (original),42.0%,±1.8%,"42.0% [33.2%, 51.2%]",0.000
+GE Comprehensive,42.9%,±0.0%,"42.9% [34.1%, 52.1%]",0.000

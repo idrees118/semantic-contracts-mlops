@@ -1,0 +1,61 @@
+# configs/experiment.yaml
+# ========================
+# All tuneable parameters for the v2 experiment.
+
+experiment:
+  name: semantic_mutation_v2
+  description: >
+    28 mutations × 4 seeds semantic contract validation framework.
+    Four validators: Semantic (ours), Ensemble Statistical, KS-only, GE Comprehensive.
+
+seeds: [42, 123, 456, 789]
+
+datasets:
+  walmart: data/processed/walmart_clean.csv
+  stock:   data/processed/stock_clean.csv
+  power:   data/processed/power_clean.csv
+
+mutations:
+  total: 28
+  categories: [scaling, temporal, structural, quality, aggregation]
+  # Partition for held-out evaluation
+  development_set_size: 19
+  held_out_set_size: 9
+
+semantic_validator:
+  confidence_threshold: 0.10
+
+ensemble_baseline:
+  voting: "any"                # "any" (OR) or "majority" (≥3/5)
+  ks_alpha: 0.01
+  jsd_threshold: 0.05
+  psi_threshold: 0.10
+  corr_frob_threshold: 0.20
+  acf_threshold: 0.08
+
+ks_baseline:
+  alpha: 0.01                  # Bonferroni-corrected per column
+
+ge_baseline:                   # NEW — Great Expectations comprehensive baseline
+  # Tolerance bands for statistical expectations, calibrated on clean data.
+  # Deliberately generous to match production usage and avoid false positives.
+  row_count_tolerance: 0.15    # ±15% row count allowed
+  mean_tolerance: 0.20         # ±20% column mean allowed (30% for stock prices)
+  std_tolerance_lo: 0.50       # lower bound: std ≥ 50% of baseline std
+  std_tolerance_hi: 2.00       # upper bound: std ≤ 200% of baseline std
+  value_range_pct: 0.99        # mostly= threshold for range expectations
+  # Dataset-specific overrides documented in ge_baseline.py
+
+evaluation:
+  confidence_level: 0.95
+  mcnemar_alpha: 0.05
+  output_dir: experiments/results
+  # Files produced:
+  #   raw_results.csv                — one row per (mutation × seed)
+  #   per_mutation_detection_rates.csv — aggregated per mutation
+  #   detection_summary.csv          — per-validator DR + FPR
+  #   mcnemar_results.csv            — significance tests
+  #   semantic_precision.csv         — per-category precision
+  #   per_category_breakdown.csv     — category-level DR
+  #   held_out_evaluation.csv        — generalisation analysis
+  #   mutation_partition.csv         — dev / held-out assignment

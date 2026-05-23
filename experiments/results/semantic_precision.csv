@@ -1,0 +1,7 @@
+category,detected,semantic_matches,precision
+aggregation,4,4,1.0
+quality,20,20,1.0
+scaling,24,24,1.0
+structural,36,32,0.8888888888888888
+temporal,24,24,1.0
+OVERALL,108,104,0.9629629629629629

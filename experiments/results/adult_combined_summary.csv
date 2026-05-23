@@ -1,0 +1,5 @@
+mutation,semantic,ensemble,ks,ge
+adult__column_swap_age_hours,1.0,1.0,1.0,0.0
+adult__flip_workclass_encoding,1.0,0.0,0.0,0.0
+adult__scale_capital_gain_10x,1.0,1.0,1.0,1.0
+clean_baseline,0.0,0.0,0.0,0.0

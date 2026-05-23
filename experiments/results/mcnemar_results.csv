@@ -1,0 +1,4 @@
+Comparison,p-value,Significant
+Semantic vs. Ensemble,0.0000,Yes
+Semantic vs. KS,0.0000,Yes
+Semantic vs. GE,0.0000,Yes

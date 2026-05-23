@@ -1,0 +1,13 @@
+mutation,category,seed,semantic,ensemble,ks,ge
+adult__column_swap_age_hours,Structural,42,1,1,1,0
+adult__column_swap_age_hours,Structural,123,1,1,1,0
+adult__column_swap_age_hours,Structural,456,1,1,1,0
+adult__column_swap_age_hours,Structural,789,1,1,1,0
+adult__scale_capital_gain_10x,Scaling,42,1,1,1,1
+adult__scale_capital_gain_10x,Scaling,123,1,1,1,1
+adult__scale_capital_gain_10x,Scaling,456,1,1,1,1
+adult__scale_capital_gain_10x,Scaling,789,1,1,1,1
+adult__flip_workclass_encoding,Structural,42,1,0,0,0
+adult__flip_workclass_encoding,Structural,123,1,0,0,0
+adult__flip_workclass_encoding,Structural,456,1,0,0,0
+adult__flip_workclass_encoding,Structural,789,1,0,0,0
