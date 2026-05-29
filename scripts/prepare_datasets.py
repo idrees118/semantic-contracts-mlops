@@ -1,16 +1,6 @@
 #!/usr/bin/env python3
 """
-scripts/prepare_datasets.py
-=============================
-Reads the three raw datasets from data/processed/ (wherever you placed them),
-standardises column names, parses dates, drops nulls, and writes out the
-clean CSVs that the experiment expects.
-
-Run once before running run_experiment.py:
-
-    python scripts/prepare_datasets.py
-
-Input files (place these in data/processed/):
+prepare_datasets.py
     AAPL_5year.csv
     household_power_consumption_1M.csv
     walmart.csv   (or Walmart.csv)

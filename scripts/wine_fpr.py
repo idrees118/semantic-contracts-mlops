@@ -3,21 +3,18 @@ wine_fpr.py
 FPR estimation only on UCI Wine Quality (red wine) dataset.
 No mutation operators are applied.
 This script exists solely to add independent clean-baseline trials
-to the FPR denominator reported in Table 5 and Limitation L5.
 """
 
 import pandas as pd
 import numpy as np
 import os
 
-# ── Load dataset ──────────────────────────────────────────────────────────────
-
+# Load dataset 
 df = pd.read_csv('data/processed/winequality-red.csv')
 df = df.dropna().reset_index(drop=True)
 baseline = df.copy()
 
-# ── Wine-specific semantic contracts ──────────────────────────────────────────
-
+# Wine-specific semantic contracts 
 def contract_acidity_ratio(base, test):
     b = base['fixed acidity'].values.astype(float)
     t = test['fixed acidity'].values.astype(float)
@@ -63,8 +60,7 @@ wine_contracts = {
     'wine__acidity_citric_correlation':  contract_acidity_citric_correlation,
 }
 
-# ── FPR check on clean data only ──────────────────────────────────────────────
-
+# FPR check on clean data only
 seeds = [42, 123, 456, 789]
 fpr_rows = []
 
@@ -81,7 +77,7 @@ for seed in seeds:
 
 fpr_df = pd.DataFrame(fpr_rows)
 
-# ── Summary ───────────────────────────────────────────────────────────────────
+# Summary 
 
 print("\n" + "="*60)
 print("WINE QUALITY FPR (clean baseline, 4 seeds)")
@@ -90,7 +86,7 @@ print(fpr_df.to_string())
 print(f"\nFPR = {fpr_df['semantic'].mean():.3f}")
 print(f"Trials = {len(fpr_df)}")
 
-# ── Save ──────────────────────────────────────────────────────────────────────
+# Save 
 
 os.makedirs('experiments/results', exist_ok=True)
 fpr_df.to_csv('experiments/results/wine_fpr_results.csv', index=False)

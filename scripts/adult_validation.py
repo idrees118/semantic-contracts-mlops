@@ -1,8 +1,6 @@
 """
 adult_validation.py
 Standalone realistic-fault validation on UCI Adult dataset.
-Runs independently of the main experiment pipeline.
-Results feed directly into Table XI of the paper.
 """
 
 import pandas as pd
