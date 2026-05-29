@@ -3,7 +3,6 @@
 Replication package for:
 
 > **Semantic Contracts for Validating Machine Learning Data Pipelines: A Mutation-Based Empirical Evaluation for Production-Oriented MLOps**  
-> Muhammad Idrees, Feras Al-Obeidat, Adnan Amin, Salma Noor, Fernando Moreira
 
 ---
 
@@ -22,20 +21,6 @@ McNemar exact test (all pairwise): p < 0.0001. Semantic Precision: 96.3%.
 
 ## Repository Structure
 ---
-
-## Replication
-
-### 1. Install
-
-```bash
-pip install -e .
-```
-
-### 2. Run the full pipeline
-
-```bash
-python main.py --all
-```
 
 Or step by step:
 
