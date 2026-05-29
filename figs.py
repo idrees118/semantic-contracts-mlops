@@ -4,8 +4,8 @@ import numpy as np
 labels = ['Semantic\nValidator', 'Ensemble\nStatistical', 'KS Drift\n(original)', 'GE\nComprehensive']
 drs = [96.4, 49.1, 42.0, 42.9]
 # Asymmetric Wilson CI half-widths from Table III
-yerr_lower = [5.2, 9.1, 8.8, 8.8]
-yerr_upper = [2.2, 9.1, 9.2, 9.2]
+yerr_lower = [14.1, 9.1, 8.8, 8.8]
+yerr_upper = [3.0, 9.1, 9.2, 9.2]
 
 # 🔥 Professional, balanced palette (not flashy, not biased)
 colors = ['#355070',  # muted navy
