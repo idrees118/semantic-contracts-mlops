@@ -1,4 +1,4 @@
-# Semantic Mutation v2
+# Semantic Mutation
 
 **Semantic Contract-Based Data Mutation Detection**  
 research framework — 28 mutations × 4 seeds × 4 validators*
