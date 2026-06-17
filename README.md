@@ -37,8 +37,8 @@ python main.py --test           # smoke tests
 python scripts/ablation_analysis.py    # Table 11: leave-one-category-out ablation
 python scripts/adult_validation.py     # Table 13: cross-domain transfer (UCI Adult)
 python scripts/wine_fpr.py             # FPR estimation on UCI Wine Quality
-python generate_figure1.py             # Figure 1
-python generate_figure2.py             # Figure 2
+python figure1.py             # Figure 1
+python figure2.py             # Figure 2
 ```
 
 ---
