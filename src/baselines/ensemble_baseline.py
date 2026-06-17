@@ -1,7 +1,5 @@
 """
 src/baselines/ensemble_baseline.py
-====================================
-Ensemble Statistical Baseline — the new, stronger baseline for v2.
 
 Combines five independent statistical tests into a single detector via
 majority-vote (any-one) aggregation:
@@ -19,12 +17,6 @@ still purely statistical — it has no access to domain-specific semantic rules.
 It will detect distribution changes, correlation changes, and temporal-order
 changes, but cannot reason about meaning (e.g., what a holiday flag means, or
 that a rolling 7-day average should be consistent with the raw sales).
-
-References
-----------
-- Population Stability Index: Yurdakul (2018), 
-  "Statistical Properties of Population Stability Index"
-- Jensen-Shannon divergence: Lin (1991), IEEE Trans. IT
 """
 from __future__ import annotations
 
