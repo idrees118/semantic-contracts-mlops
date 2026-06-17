@@ -7,7 +7,7 @@ drs = [96.4, 49.1, 42.0, 42.9]
 yerr_lower = [14.1, 9.1, 8.8, 8.8]
 yerr_upper = [3.0, 9.1, 9.2, 9.2]
 
-# 🔥 Professional, balanced palette (not flashy, not biased)
+# balanced palette (not flashy, not biased)
 colors = ['#355070',  # muted navy
           '#6D597A',  # soft purple-gray
           '#B56576',  # muted rose
