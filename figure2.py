@@ -4,22 +4,6 @@ import numpy as np
 categories = ['Aggregation', 'Quality', 'Scaling', 'Structural', 'Temporal']
 validators = ['Semantic', 'Ensemble', 'KS Drift', 'GE']
 
-# Recomputed from Table 5 (Per-Mutation Detection Matrix).
-# Definition: fraction of mutations in category detected at >= 1 seed (i.e., ✓ or ◦ both count).
-# Denominators: Aggregation=1, Quality=6, Scaling=6, Structural=9, Temporal=6.
-#
-# Structural counts per validator (✓ or ◦):
-#   Semantic:  toggle✓ miss_rec✓ miss_st✓ drop✓ col_oc✓ col_vi✓ miss_6h✓ rep✓ sign✓ = 9/9
-#   Ensemble:  toggle✓ miss_rec✓ miss_st◦ col_vi✓ sign✓                              = 5/9
-#   KS Drift:  toggle✓ miss_rec✓ miss_st◦ col_vi✓ sign✓                              = 5/9
-#   GE:        toggle✓ miss_st✓  col_vi✓  rep✓    sign✓                              = 5/9
-#
-# Temporal counts per validator (✓ or ◦):
-#   Semantic:  all 6 = 6/6
-#   Ensemble:  shuffle✓ reverse✓                                                      = 2/6
-#   KS Drift:  none                                                                   = 0/6
-#   GE:        shift_-7✓ shift_+7✓                                                   = 2/6
-
 grid = np.array([
     [100, 83, 100, 100, 100],   # Semantic:  1/1, 5/6, 6/6, 9/9, 6/6
     [100, 17,  83,  56,  33],   # Ensemble:  1/1, 1/6, 5/6, 5/9, 2/6
